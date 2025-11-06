@@ -275,8 +275,8 @@ class MoenApi:
             _LOGGER.error("Failed to subscribe to channel %s: %s", channel_name, err)
             return False
 
-    async def send_client_event(self, channel_id: str, event_name: str, event_data: Dict[str, Any]):
-        """Send a client event to control the device."""
+    async def send_control_event(self, channel_id: str, action: str, params: Dict[str, Any]):
+        """Send a control event to the device."""
         if not self._running or not self._ws:
             _LOGGER.error("Pusher not connected, cannot send event")
             return False
@@ -287,23 +287,30 @@ class MoenApi:
             _LOGGER.error("Not subscribed to channel %s", channel_name)
             return False
 
+        # Format matches the real Moen app: client-state-desired with type=control
         message = {
-            "event": f"client-{event_name}",
+            "event": "client-state-desired",
             "channel": channel_name,
-            "data": event_data
+            "data": {
+                "type": "control",
+                "data": {
+                    "action": action,
+                    "params": params
+                }
+            }
         }
 
         try:
             await self._ws.send_json(message)
-            _LOGGER.debug("Sent client event '%s' to channel '%s': %s", event_name, channel_name, event_data)
+            _LOGGER.debug("Sent control event '%s' to channel '%s': %s", action, channel_name, params)
             return True
 
         except Exception as err:
-            _LOGGER.error("Failed to send client event: %s", err)
+            _LOGGER.error("Failed to send control event: %s", err)
             return False
 
     async def set_shower_mode(self, serial_number: str, mode: str) -> None:
-        """Set shower mode (on/off/pause)."""
+        """Set shower mode (on/off)."""
         device_details = await self.get_device_details(serial_number)
         channel_id = device_details.get("channel")
 
@@ -311,7 +318,11 @@ class MoenApi:
             _LOGGER.error("No channel ID found for device %s", serial_number)
             return
 
-        await self.send_client_event(channel_id, "shower-control", {"mode": mode})
+        # Use the actual action names from the real app
+        if mode == "on":
+            await self.send_control_event(channel_id, "shower_on", {"preset": "0"})
+        else:
+            await self.send_control_event(channel_id, "shower_off", {})
 
     async def activate_preset(self, serial_number: str, preset_position: int) -> None:
         """Activate a preset."""
@@ -322,7 +333,35 @@ class MoenApi:
             _LOGGER.error("No channel ID found for device %s", serial_number)
             return
 
-        await self.send_client_event(channel_id, "activate-preset", {"position": preset_position})
+        # Get preset details
+        presets = device_details.get("presets", [])
+        preset = None
+        for p in presets:
+            if p.get("position") == preset_position:
+                preset = p
+                break
+
+        if not preset:
+            _LOGGER.error("Preset %d not found", preset_position)
+            return
+
+        # Send shower_set with all preset parameters (matches real app)
+        params = {
+            "active_preset": preset_position,
+            "title": preset.get("title", ""),
+            "greeting": preset.get("greeting", ""),
+            "target_temperature": preset.get("target_temperature", 100),
+            "outlets": preset.get("outlets", []),
+            "timer_enabled": preset.get("timer_enabled", False),
+            "timer_length": preset.get("timer_length", 600),
+            "timer_ends_shower": preset.get("timer_ends_shower", False),
+            "timer_sounds_alert": preset.get("timer_sounds_alert", True),
+            "ready_pauses_water": preset.get("ready_pauses_water", False),
+            "ready_pushes_notification": preset.get("ready_pushes_notification", False),
+            "ready_sounds_alert": preset.get("ready_sounds_alert", True),
+        }
+
+        await self.send_control_event(channel_id, "shower_set", params)
 
     async def set_target_temperature(self, serial_number: str, temperature: float) -> None:
         """Set target temperature."""
@@ -333,10 +372,10 @@ class MoenApi:
             _LOGGER.error("No channel ID found for device %s", serial_number)
             return
 
-        await self.send_client_event(channel_id, "set-temperature", {"target_temperature": int(temperature)})
+        await self.send_control_event(channel_id, "temperature_set", {"target_temperature": int(temperature)})
 
     async def set_outlet_state(self, serial_number: str, outlet_position: int, active: bool) -> None:
-        """Set outlet state."""
+        """Set outlet state - sets all outlets at once."""
         device_details = await self.get_device_details(serial_number)
         channel_id = device_details.get("channel")
 
@@ -344,7 +383,17 @@ class MoenApi:
             _LOGGER.error("No channel ID found for device %s", serial_number)
             return
 
-        await self.send_client_event(channel_id, "set-outlet", {"position": outlet_position, "active": active})
+        # Get current outlet states and update the specific outlet
+        outlets = device_details.get("outlets", [])
+        outlet_states = []
+        for outlet in outlets:
+            pos = outlet.get("position")
+            is_active = outlet.get("active", False)
+            if pos == outlet_position:
+                is_active = active
+            outlet_states.append({"position": pos, "active": is_active})
+
+        await self.send_control_event(channel_id, "outlets_set", {"outlets": outlet_states})
 
     async def disconnect_pusher(self):
         """Disconnect from Pusher WebSocket."""
