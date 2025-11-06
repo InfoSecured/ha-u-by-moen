@@ -257,12 +257,13 @@ class MoenApi:
             return False
 
         # Send subscription message
+        # NOTE: Pusher requires 'data' field to be a JSON string
         subscribe_msg = {
             "event": "pusher:subscribe",
-            "data": {
+            "data": json.dumps({
                 "channel": channel_name,
                 "auth": auth,
-            }
+            })
         }
 
         try:
@@ -288,16 +289,19 @@ class MoenApi:
             return False
 
         # Format matches the real Moen app: client-state-desired with type=control
+        # NOTE: Pusher requires 'data' field to be a JSON string, not a dict
+        data_payload = {
+            "type": "control",
+            "data": {
+                "action": action,
+                "params": params
+            }
+        }
+
         message = {
             "event": "client-state-desired",
             "channel": channel_name,
-            "data": {
-                "type": "control",
-                "data": {
-                    "action": action,
-                    "params": params
-                }
-            }
+            "data": json.dumps(data_payload)  # Must be JSON string!
         }
 
         try:
