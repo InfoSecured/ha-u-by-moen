@@ -1,0 +1,5 @@
+{
+  "name": "U by Moen",
+  "render_readme": true,
+  "domains": ["climate", "switch", "sensor", "button"]
+}
