@@ -12,7 +12,6 @@ from .const import (
     DOMAIN,
     ATTR_OUTLETS,
     MODE_OFF,
-    MODE_ON,
     ICON_SHOWER,
     ICON_OUTLET,
 )
@@ -106,7 +105,7 @@ class MoenShowerSwitch(CoordinatorEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the shower on."""
-        await self._api.set_shower_mode(self._serial_number, MODE_ON)
+        await self._api.set_shower_mode(self._serial_number, "on")
         # State will update via Pusher client-state-reported event
 
     async def async_turn_off(self, **kwargs: Any) -> None:

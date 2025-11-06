@@ -21,7 +21,6 @@ from .const import (
     ATTR_TARGET_TEMP,
     ATTR_MAX_TEMP,
     MODE_OFF,
-    MODE_ON,
     ICON_SHOWER,
 )
 from .coordinator import MoenDataUpdateCoordinator
@@ -126,7 +125,7 @@ class MoenClimate(CoordinatorEntity, ClimateEntity):
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new HVAC mode."""
         if hvac_mode == HVACMode.HEAT:
-            await self._api.set_shower_mode(self._serial_number, MODE_ON)
+            await self._api.set_shower_mode(self._serial_number, "on")
         elif hvac_mode == HVACMode.OFF:
             await self._api.set_shower_mode(self._serial_number, MODE_OFF)
         # State will update via Pusher client-state-reported event
