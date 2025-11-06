@@ -67,6 +67,8 @@ class MoenClimate(CoordinatorEntity, ClimateEntity):
         self._api = api
         self._serial_number = serial_number
         self._attr_unique_id = f"{serial_number}_climate"
+        self._optimistic_hvac_mode = None  # None means use coordinator data
+        self._optimistic_target_temp = None  # None means use coordinator data
 
     @property
     def device_info(self):
@@ -89,6 +91,10 @@ class MoenClimate(CoordinatorEntity, ClimateEntity):
     @property
     def hvac_mode(self) -> HVACMode:
         """Return current HVAC mode."""
+        # If we have an optimistic mode (command just sent), use that
+        if self._optimistic_hvac_mode is not None:
+            return self._optimistic_hvac_mode
+        # Otherwise use coordinator data
         device_data = self.coordinator.data[self._serial_number]
         mode = device_data.get(ATTR_MODE, MODE_OFF)
         # Any mode other than "off" means the shower is on (adjusting, ready, pause)
@@ -103,6 +109,10 @@ class MoenClimate(CoordinatorEntity, ClimateEntity):
     @property
     def target_temperature(self) -> Optional[float]:
         """Return the target temperature."""
+        # If we have an optimistic target temp (command just sent), use that
+        if self._optimistic_target_temp is not None:
+            return self._optimistic_target_temp
+        # Otherwise use coordinator data
         device_data = self.coordinator.data[self._serial_number]
         return device_data.get(ATTR_TARGET_TEMP)
 
@@ -124,19 +134,23 @@ class MoenClimate(CoordinatorEntity, ClimateEntity):
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new HVAC mode."""
+        self._optimistic_hvac_mode = hvac_mode  # Optimistically assume it worked
+        self.async_write_ha_state()  # Update UI immediately
         if hvac_mode == HVACMode.HEAT:
             await self._api.set_shower_mode(self._serial_number, "on")
         elif hvac_mode == HVACMode.OFF:
             await self._api.set_shower_mode(self._serial_number, MODE_OFF)
-        # State will update via Pusher client-state-reported event
+        # State will be confirmed via Pusher client-state-reported event
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
         if (temperature := kwargs.get(ATTR_TEMPERATURE)) is None:
             return
 
+        self._optimistic_target_temp = temperature  # Optimistically assume it worked
+        self.async_write_ha_state()  # Update UI immediately
         await self._api.set_target_temperature(self._serial_number, temperature)
-        # State will update via Pusher client-state-reported event
+        # State will be confirmed via Pusher client-state-reported event
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -148,3 +162,11 @@ class MoenClimate(CoordinatorEntity, ClimateEntity):
             "active_preset": device_data.get("active_preset"),
             "firmware_version": device_data.get("current_firmware_version"),
         }
+
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        # When coordinator updates (Pusher event), clear optimistic states
+        # so we use the actual confirmed state from the device
+        self._optimistic_hvac_mode = None
+        self._optimistic_target_temp = None
+        super()._handle_coordinator_update()

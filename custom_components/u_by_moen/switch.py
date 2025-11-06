@@ -75,6 +75,7 @@ class MoenShowerSwitch(CoordinatorEntity, SwitchEntity):
         self._api = api
         self._serial_number = serial_number
         self._attr_unique_id = f"{serial_number}_power"
+        self._optimistic_state = None  # None means use coordinator data
 
     @property
     def device_info(self):
@@ -98,6 +99,10 @@ class MoenShowerSwitch(CoordinatorEntity, SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return true if the shower is on."""
+        # If we have an optimistic state (command just sent), use that
+        if self._optimistic_state is not None:
+            return self._optimistic_state
+        # Otherwise use coordinator data
         device_data = self.coordinator.data[self._serial_number]
         mode = device_data.get("mode", MODE_OFF)
         # Any mode other than "off" means the shower is on
@@ -105,13 +110,24 @@ class MoenShowerSwitch(CoordinatorEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the shower on."""
+        self._optimistic_state = True  # Optimistically assume it worked
+        self.async_write_ha_state()  # Update UI immediately
         await self._api.set_shower_mode(self._serial_number, "on")
-        # State will update via Pusher client-state-reported event
+        # State will be confirmed via Pusher client-state-reported event
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the shower off."""
+        self._optimistic_state = False  # Optimistically assume it worked
+        self.async_write_ha_state()  # Update UI immediately
         await self._api.set_shower_mode(self._serial_number, MODE_OFF)
-        # State will update via Pusher client-state-reported event
+        # State will be confirmed via Pusher client-state-reported event
+
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        # When coordinator updates (Pusher event), clear optimistic state
+        # so we use the actual confirmed state from the device
+        self._optimistic_state = None
+        super()._handle_coordinator_update()
 
 
 class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
@@ -130,6 +146,7 @@ class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
         self._serial_number = serial_number
         self._outlet_position = outlet_position
         self._attr_unique_id = f"{serial_number}_outlet_{outlet_position}"
+        self._optimistic_state = None  # None means use coordinator data
 
     @property
     def device_info(self):
@@ -170,6 +187,10 @@ class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return true if the outlet is active."""
+        # If we have an optimistic state (command just sent), use that
+        if self._optimistic_state is not None:
+            return self._optimistic_state
+        # Otherwise use coordinator data
         outlet = self._get_outlet_data()
         if outlet:
             return outlet.get("active", False)
@@ -177,13 +198,24 @@ class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the outlet on."""
+        self._optimistic_state = True  # Optimistically assume it worked
+        self.async_write_ha_state()  # Update UI immediately
         await self._api.set_outlet_state(self._serial_number, self._outlet_position, True)
-        # State will update via Pusher client-state-reported event
+        # State will be confirmed via Pusher client-state-reported event
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the outlet off."""
+        self._optimistic_state = False  # Optimistically assume it worked
+        self.async_write_ha_state()  # Update UI immediately
         await self._api.set_outlet_state(self._serial_number, self._outlet_position, False)
-        # State will update via Pusher client-state-reported event
+        # State will be confirmed via Pusher client-state-reported event
+
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        # When coordinator updates (Pusher event), clear optimistic state
+        # so we use the actual confirmed state from the device
+        self._optimistic_state = None
+        super()._handle_coordinator_update()
 
     def _get_outlet_data(self) -> Optional[dict]:
         """Get the outlet data for this position."""
