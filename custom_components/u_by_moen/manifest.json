@@ -1,0 +1,10 @@
+{
+  "domain": "u_by_moen",
+  "name": "U by Moen",
+  "documentation": "https://github.com/yourusername/u-by-moen",
+  "requirements": ["pysher==1.0.8", "aiohttp==3.9.1"],
+  "codeowners": ["@yourusername"],
+  "config_flow": true,
+  "iot_class": "cloud_push",
+  "version": "0.1.0"
+}

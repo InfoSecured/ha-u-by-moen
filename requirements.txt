@@ -1,0 +1,6 @@
+# Runtime requirements (also in manifest.json)
+pysher==1.0.8
+aiohttp==3.9.1
+
+# Development requirements
+homeassistant>=2024.1.0
