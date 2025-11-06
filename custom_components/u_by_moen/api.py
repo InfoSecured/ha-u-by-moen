@@ -257,13 +257,12 @@ class MoenApi:
             return False
 
         # Send subscription message
-        # NOTE: Pusher requires 'data' field to be a JSON string
         subscribe_msg = {
             "event": "pusher:subscribe",
-            "data": json.dumps({
+            "data": {
                 "channel": channel_name,
                 "auth": auth,
-            })
+            }
         }
 
         try:
@@ -289,24 +288,22 @@ class MoenApi:
             return False
 
         # Format matches the real Moen app: client-state-desired with type=control
-        # NOTE: Pusher requires 'data' field to be a JSON string, not a dict
-        data_payload = {
-            "type": "control",
-            "data": {
-                "action": action,
-                "params": params
-            }
-        }
-
         message = {
             "event": "client-state-desired",
             "channel": channel_name,
-            "data": json.dumps(data_payload)  # Must be JSON string!
+            "data": {
+                "type": "control",
+                "data": {
+                    "action": action,
+                    "params": params
+                }
+            }
         }
 
         try:
+            _LOGGER.debug("Sending message: %s", message)
             await self._ws.send_json(message)
-            _LOGGER.debug("Sent control event '%s' to channel '%s': %s", action, channel_name, params)
+            _LOGGER.info("Sent control event '%s' to channel '%s': %s", action, channel_name, params)
             return True
 
         except Exception as err:
