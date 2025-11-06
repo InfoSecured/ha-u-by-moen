@@ -92,7 +92,8 @@ class MoenClimate(CoordinatorEntity, ClimateEntity):
         """Return current HVAC mode."""
         device_data = self.coordinator.data[self._serial_number]
         mode = device_data.get(ATTR_MODE, MODE_OFF)
-        return HVACMode.HEAT if mode == MODE_ON else HVACMode.OFF
+        # Any mode other than "off" means the shower is on (adjusting, ready, pause)
+        return HVACMode.HEAT if mode != MODE_OFF else HVACMode.OFF
 
     @property
     def current_temperature(self) -> Optional[float]:

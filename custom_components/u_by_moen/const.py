@@ -27,9 +27,10 @@ ATTR_PRESETS = "presets"
 ATTR_FIRMWARE = "current_firmware_version"
 ATTR_BATTERY = "battery_level"
 
-# Modes
+# Modes (actual values from API)
 MODE_OFF = "off"
-MODE_ON = "on"
+MODE_ADJUSTING = "adjusting"  # Shower is on and heating/cooling
+MODE_READY = "ready"  # Shower is on and at target temperature
 MODE_PAUSE = "pause"
 
 # Update interval

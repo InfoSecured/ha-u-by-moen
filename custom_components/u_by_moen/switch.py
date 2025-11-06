@@ -101,7 +101,8 @@ class MoenShowerSwitch(CoordinatorEntity, SwitchEntity):
         """Return true if the shower is on."""
         device_data = self.coordinator.data[self._serial_number]
         mode = device_data.get("mode", MODE_OFF)
-        return mode == MODE_ON
+        # Any mode other than "off" means the shower is on
+        return mode != MODE_OFF
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the shower on."""
