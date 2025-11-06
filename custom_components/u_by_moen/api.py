@@ -1,12 +1,9 @@
 """API client for U by Moen."""
 import logging
 import asyncio
-from typing import Any, Dict, List, Optional
-import aiohttp
 import json
-from threading import Thread
-
-import pysher
+from typing import Any, Dict, List, Optional, Callable
+import aiohttp
 
 from .const import (
     API_BASE_URL,
@@ -40,10 +37,12 @@ class MoenApi:
         self._token: Optional[str] = None
         self._pusher_key: Optional[str] = None
         self._pusher_cluster: Optional[str] = None
-        self._pusher = None
-        self._pusher_thread = None
-        self._channels: Dict[str, Any] = {}
-        self._device_callbacks: Dict[str, callable] = {}
+        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._socket_id: Optional[str] = None
+        self._subscribed_channels: Dict[str, bool] = {}
+        self._ws_task: Optional[asyncio.Task] = None
+        self._update_callbacks: Dict[str, Callable] = {}
+        self._running = False
 
     async def authenticate(self) -> str:
         """Authenticate with the Moen API and return the token."""
@@ -126,155 +125,247 @@ class MoenApi:
         except aiohttp.ClientError as err:
             raise MoenApiError(f"Failed to get device details: {err}") from err
 
-    async def get_pusher_auth(self, socket_id: str, channel_name: str) -> str:
+    async def get_pusher_auth(self, channel_name: str) -> str:
         """Get Pusher authentication for private channel."""
         if not self._token:
             await self.authenticate()
+
+        if not self._socket_id:
+            _LOGGER.error("No socket_id available for Pusher auth")
+            return ""
 
         url = f"{API_BASE_URL}{API_PUSHER_AUTH}"
         headers = {
             "User-Token": self._token,
             "Content-Type": "application/x-www-form-urlencoded",
         }
-        data = f"socket_id={socket_id}&channel_name={channel_name}"
+        data = f"socket_id={self._socket_id}&channel_name={channel_name}"
 
         try:
             async with self._session.post(url, headers=headers, data=data) as response:
                 response.raise_for_status()
                 auth_data = await response.json()
-                return auth_data.get("auth")
+                return auth_data.get("auth", "")
 
         except aiohttp.ClientError as err:
-            raise MoenApiError(f"Failed to get Pusher auth: {err}") from err
+            _LOGGER.error("Failed to get Pusher auth: %s", err)
+            return ""
 
-    def _pusher_auth_handler(self, socket_id: str, channel_name: str) -> Dict[str, str]:
-        """Handle Pusher authentication requests (sync wrapper)."""
-        # This needs to be synchronous for pysher, so we'll need to handle this differently
-        # For now, we'll return a placeholder and handle auth via the async method
-        _LOGGER.debug("Pusher auth requested for channel %s", channel_name)
-        return {}
-
-    def start_pusher(self, callback: callable = None):
-        """Start Pusher connection in a separate thread."""
+    async def connect_pusher(self) -> bool:
+        """Connect to Pusher WebSocket."""
         if not self._pusher_key or not self._pusher_cluster:
             _LOGGER.error("Pusher credentials not available")
-            return
+            return False
 
-        def pusher_thread():
-            self._pusher = pysher.Pusher(
-                key=self._pusher_key,
-                cluster=self._pusher_cluster,
-                auth_endpoint_callback=self._pusher_auth_handler,
-            )
+        if self._running:
+            _LOGGER.debug("Pusher already connected")
+            return True
 
-            self._pusher.connection.bind("pusher:connection_established", callback)
-            self._pusher.connect()
+        ws_url = f"wss://ws-{self._pusher_cluster}.pusher.com/app/{self._pusher_key}?protocol=7&client=python-client&version=1.0"
 
-            # Keep thread alive
-            while True:
-                import time
-                time.sleep(1)
+        try:
+            self._ws = await self._session.ws_connect(ws_url)
+            self._running = True
+            _LOGGER.info("Connected to Pusher WebSocket")
 
-        self._pusher_thread = Thread(target=pusher_thread, daemon=True)
-        self._pusher_thread.start()
-        _LOGGER.debug("Started Pusher connection thread")
+            # Start message handler task
+            self._ws_task = asyncio.create_task(self._handle_messages())
+            return True
 
-    def subscribe_to_device(
-        self, channel_id: str, callback: callable
-    ) -> None:
-        """Subscribe to device updates via Pusher."""
-        if not self._pusher:
-            _LOGGER.error("Pusher not initialized")
-            return
+        except Exception as err:
+            _LOGGER.error("Failed to connect to Pusher: %s", err)
+            return False
+
+    async def _handle_messages(self):
+        """Handle incoming WebSocket messages."""
+        try:
+            async for msg in self._ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    await self._process_message(msg.data)
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    _LOGGER.error("WebSocket error: %s", self._ws.exception())
+                    break
+        except asyncio.CancelledError:
+            _LOGGER.debug("WebSocket handler cancelled")
+        except Exception as err:
+            _LOGGER.error("Error handling WebSocket messages: %s", err)
+        finally:
+            self._running = False
+
+    async def _process_message(self, message: str):
+        """Process a Pusher message."""
+        try:
+            data = json.loads(message)
+            event = data.get("event")
+
+            if event == "pusher:connection_established":
+                connection_data = json.loads(data.get("data", "{}"))
+                self._socket_id = connection_data.get("socket_id")
+                _LOGGER.info("Pusher connection established, socket_id: %s", self._socket_id)
+
+            elif event == "pusher:error":
+                _LOGGER.error("Pusher error: %s", data.get("data"))
+
+            elif event == "pusher_internal:subscription_succeeded":
+                channel = data.get("channel")
+                _LOGGER.info("Successfully subscribed to channel: %s", channel)
+                self._subscribed_channels[channel] = True
+
+            else:
+                # Handle custom events (device updates)
+                channel = data.get("channel", "")
+                event_data = data.get("data")
+                if event_data:
+                    try:
+                        event_data = json.loads(event_data) if isinstance(event_data, str) else event_data
+                    except json.JSONDecodeError:
+                        pass
+
+                _LOGGER.debug("Received event '%s' on channel '%s': %s", event, channel, event_data)
+
+                # Call update callbacks
+                if channel in self._update_callbacks:
+                    await self._update_callbacks[channel](event, event_data)
+
+        except json.JSONDecodeError as err:
+            _LOGGER.error("Failed to parse Pusher message: %s", err)
+        except Exception as err:
+            _LOGGER.error("Error processing Pusher message: %s", err)
+
+    async def subscribe_to_channel(self, channel_id: str, callback: Callable):
+        """Subscribe to a device channel."""
+        if not self._running:
+            _LOGGER.error("Pusher not connected, cannot subscribe")
+            return False
 
         channel_name = f"{PUSHER_CHANNEL_PREFIX}{channel_id}"
-        channel = self._pusher.subscribe(channel_name)
 
-        # Bind to all possible events
-        channel.bind("shower-update", callback)
-        channel.bind("status-update", callback)
+        # Wait for socket_id if not yet available
+        retries = 0
+        while not self._socket_id and retries < 10:
+            await asyncio.sleep(0.5)
+            retries += 1
 
-        self._channels[channel_id] = channel
-        self._device_callbacks[channel_id] = callback
+        if not self._socket_id:
+            _LOGGER.error("No socket_id available, cannot subscribe")
+            return False
 
-        _LOGGER.debug("Subscribed to channel: %s", channel_name)
+        # Get auth for private channel
+        auth = await self.get_pusher_auth(channel_name)
+        if not auth:
+            _LOGGER.error("Failed to get auth for channel %s", channel_name)
+            return False
+
+        # Send subscription message
+        subscribe_msg = {
+            "event": "pusher:subscribe",
+            "data": {
+                "channel": channel_name,
+                "auth": auth,
+            }
+        }
+
+        try:
+            await self._ws.send_json(subscribe_msg)
+            self._update_callbacks[channel_name] = callback
+            _LOGGER.debug("Sent subscription request for channel: %s", channel_name)
+            return True
+
+        except Exception as err:
+            _LOGGER.error("Failed to subscribe to channel %s: %s", channel_name, err)
+            return False
+
+    async def send_client_event(self, channel_id: str, event_name: str, event_data: Dict[str, Any]):
+        """Send a client event to control the device."""
+        if not self._running or not self._ws:
+            _LOGGER.error("Pusher not connected, cannot send event")
+            return False
+
+        channel_name = f"{PUSHER_CHANNEL_PREFIX}{channel_id}"
+
+        if channel_name not in self._subscribed_channels:
+            _LOGGER.error("Not subscribed to channel %s", channel_name)
+            return False
+
+        message = {
+            "event": f"client-{event_name}",
+            "channel": channel_name,
+            "data": event_data
+        }
+
+        try:
+            await self._ws.send_json(message)
+            _LOGGER.debug("Sent client event '%s' to channel '%s': %s", event_name, channel_name, event_data)
+            return True
+
+        except Exception as err:
+            _LOGGER.error("Failed to send client event: %s", err)
+            return False
 
     async def set_shower_mode(self, serial_number: str, mode: str) -> None:
-        """Set shower mode (on/off/pause) via Pusher client event."""
-        channel_id = await self._get_channel_id(serial_number)
+        """Set shower mode (on/off/pause)."""
+        device_details = await self.get_device_details(serial_number)
+        channel_id = device_details.get("channel")
+
         if not channel_id:
             _LOGGER.error("No channel ID found for device %s", serial_number)
             return
 
-        channel = self._channels.get(channel_id)
-        if not channel:
-            _LOGGER.error("Not subscribed to channel for device %s", serial_number)
-            return
-
-        # Send client event to control the shower
-        event_data = {"mode": mode}
-        channel.trigger("client-shower-control", event_data)
-        _LOGGER.debug("Sent mode change to %s: %s", serial_number, mode)
+        await self.send_client_event(channel_id, "shower-control", {"mode": mode})
 
     async def activate_preset(self, serial_number: str, preset_position: int) -> None:
-        """Activate a preset via Pusher client event."""
-        channel_id = await self._get_channel_id(serial_number)
+        """Activate a preset."""
+        device_details = await self.get_device_details(serial_number)
+        channel_id = device_details.get("channel")
+
         if not channel_id:
             _LOGGER.error("No channel ID found for device %s", serial_number)
             return
 
-        channel = self._channels.get(channel_id)
-        if not channel:
-            _LOGGER.error("Not subscribed to channel for device %s", serial_number)
-            return
-
-        event_data = {"position": preset_position}
-        channel.trigger("client-activate-preset", event_data)
-        _LOGGER.debug("Activated preset %d on %s", preset_position, serial_number)
+        await self.send_client_event(channel_id, "activate-preset", {"position": preset_position})
 
     async def set_target_temperature(self, serial_number: str, temperature: float) -> None:
-        """Set target temperature via Pusher client event."""
-        channel_id = await self._get_channel_id(serial_number)
-        if not channel_id:
-            _LOGGER.error("No channel ID found for device %s", serial_number)
-            return
-
-        channel = self._channels.get(channel_id)
-        if not channel:
-            _LOGGER.error("Not subscribed to channel for device %s", serial_number)
-            return
-
-        event_data = {"target_temperature": int(temperature)}
-        channel.trigger("client-set-temperature", event_data)
-        _LOGGER.debug("Set temperature to %d on %s", int(temperature), serial_number)
-
-    async def set_outlet_state(
-        self, serial_number: str, outlet_position: int, active: bool
-    ) -> None:
-        """Set outlet state via Pusher client event."""
-        channel_id = await self._get_channel_id(serial_number)
-        if not channel_id:
-            _LOGGER.error("No channel ID found for device %s", serial_number)
-            return
-
-        channel = self._channels.get(channel_id)
-        if not channel:
-            _LOGGER.error("Not subscribed to channel for device %s", serial_number)
-            return
-
-        event_data = {"position": outlet_position, "active": active}
-        channel.trigger("client-set-outlet", event_data)
-        _LOGGER.debug(
-            "Set outlet %d to %s on %s", outlet_position, active, serial_number
-        )
-
-    async def _get_channel_id(self, serial_number: str) -> Optional[str]:
-        """Get channel ID for a device."""
+        """Set target temperature."""
         device_details = await self.get_device_details(serial_number)
-        return device_details.get("channel")
+        channel_id = device_details.get("channel")
+
+        if not channel_id:
+            _LOGGER.error("No channel ID found for device %s", serial_number)
+            return
+
+        await self.send_client_event(channel_id, "set-temperature", {"target_temperature": int(temperature)})
+
+    async def set_outlet_state(self, serial_number: str, outlet_position: int, active: bool) -> None:
+        """Set outlet state."""
+        device_details = await self.get_device_details(serial_number)
+        channel_id = device_details.get("channel")
+
+        if not channel_id:
+            _LOGGER.error("No channel ID found for device %s", serial_number)
+            return
+
+        await self.send_client_event(channel_id, "set-outlet", {"position": outlet_position, "active": active})
+
+    async def disconnect_pusher(self):
+        """Disconnect from Pusher WebSocket."""
+        self._running = False
+
+        if self._ws_task:
+            self._ws_task.cancel()
+            try:
+                await self._ws_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._ws and not self._ws.closed:
+            await self._ws.close()
+
+        self._ws = None
+        self._socket_id = None
+        self._subscribed_channels.clear()
+        _LOGGER.info("Disconnected from Pusher")
 
     def stop_pusher(self):
-        """Stop the Pusher connection."""
-        if self._pusher:
-            self._pusher.disconnect()
-            _LOGGER.debug("Disconnected from Pusher")
+        """Stop Pusher connection (sync wrapper for unload)."""
+        if self._ws_task:
+            self._ws_task.cancel()

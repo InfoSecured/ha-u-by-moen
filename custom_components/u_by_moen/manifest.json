@@ -2,9 +2,9 @@
   "domain": "u_by_moen",
   "name": "U by Moen",
   "documentation": "https://github.com/InfoSecured/ha-u-by-moen",
-  "requirements": ["pysher==1.0.8"],
+  "requirements": [],
   "codeowners": ["@InfoSecured"],
   "config_flow": true,
   "iot_class": "cloud_push",
-  "version": "0.1.1"
+  "version": "0.2.0"
 }

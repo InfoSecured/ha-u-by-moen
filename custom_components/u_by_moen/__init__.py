@@ -50,8 +50,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Set up platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # TODO: Set up Pusher connection for real-time updates
-    # This will be implemented once we understand the Pusher event format
+    # Set up Pusher WebSocket connection
+    await api.connect_pusher()
+
+    # Subscribe to device channels for real-time updates
+    async def device_update_callback(event: str, data: dict):
+        """Handle device updates from Pusher."""
+        _LOGGER.debug("Device update received: event=%s, data=%s", event, data)
+        # Update coordinator with new data
+        # The coordinator will notify all entities
+        await coordinator.async_request_refresh()
+
+    for serial_number, device_data in coordinator.data.items():
+        channel_id = device_data.get("channel")
+        if channel_id:
+            await api.subscribe_to_channel(channel_id, device_update_callback)
+            _LOGGER.info("Subscribed to updates for device %s", serial_number)
 
     return True
 
@@ -62,9 +76,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
-        # Stop Pusher connection
+        # Disconnect from Pusher
         api = hass.data[DOMAIN][entry.entry_id]["api"]
-        api.stop_pusher()
+        await api.disconnect_pusher()
 
         # Remove the entry
         hass.data[DOMAIN].pop(entry.entry_id)
