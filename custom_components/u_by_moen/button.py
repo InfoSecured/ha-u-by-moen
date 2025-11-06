@@ -90,7 +90,7 @@ class MoenPresetButton(CoordinatorEntity, ButtonEntity):
             self._serial_number,
         )
         await self._api.activate_preset(self._serial_number, self._preset_position)
-        await self.coordinator.async_request_refresh()
+        # State will update via Pusher client-state-reported event
 
     def _get_preset_data(self) -> dict:
         """Get the preset data for this position."""

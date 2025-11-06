@@ -128,9 +128,7 @@ class MoenClimate(CoordinatorEntity, ClimateEntity):
             await self._api.set_shower_mode(self._serial_number, MODE_ON)
         elif hvac_mode == HVACMode.OFF:
             await self._api.set_shower_mode(self._serial_number, MODE_OFF)
-
-        # Request a coordinator update
-        await self.coordinator.async_request_refresh()
+        # State will update via Pusher client-state-reported event
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
@@ -138,9 +136,7 @@ class MoenClimate(CoordinatorEntity, ClimateEntity):
             return
 
         await self._api.set_target_temperature(self._serial_number, temperature)
-
-        # Request a coordinator update
-        await self.coordinator.async_request_refresh()
+        # State will update via Pusher client-state-reported event
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

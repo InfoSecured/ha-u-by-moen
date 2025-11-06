@@ -106,12 +106,12 @@ class MoenShowerSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the shower on."""
         await self._api.set_shower_mode(self._serial_number, MODE_ON)
-        await self.coordinator.async_request_refresh()
+        # State will update via Pusher client-state-reported event
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the shower off."""
         await self._api.set_shower_mode(self._serial_number, MODE_OFF)
-        await self.coordinator.async_request_refresh()
+        # State will update via Pusher client-state-reported event
 
 
 class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
@@ -178,12 +178,12 @@ class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the outlet on."""
         await self._api.set_outlet_state(self._serial_number, self._outlet_position, True)
-        await self.coordinator.async_request_refresh()
+        # State will update via Pusher client-state-reported event
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the outlet off."""
         await self._api.set_outlet_state(self._serial_number, self._outlet_position, False)
-        await self.coordinator.async_request_refresh()
+        # State will update via Pusher client-state-reported event
 
     def _get_outlet_data(self) -> Optional[dict]:
         """Get the outlet data for this position."""
