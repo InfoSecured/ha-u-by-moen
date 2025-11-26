@@ -32,6 +32,7 @@ MODE_OFF = "off"
 MODE_ADJUSTING = "adjusting"  # Shower is on and heating/cooling
 MODE_READY = "ready"  # Shower is on and at target temperature
 MODE_PAUSE = "pause"
+MODE_PAUSED_BY_PRESET = "paused-by-preset"  # Shower paused at temperature by preset's ready_pauses_water setting
 
 # Update interval
 UPDATE_INTERVAL = 30  # seconds

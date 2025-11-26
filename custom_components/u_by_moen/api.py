@@ -347,10 +347,10 @@ class MoenApi:
             _LOGGER.error("Preset %d not found", preset_position)
             return
 
-        # Activate the preset by first configuring it with shower_set,
-        # then turning on the shower. This ensures all preset settings
-        # (including ready_pauses_water which controls auto-stop at temperature)
-        # are applied before the shower starts
+        # Activate the preset by sending ONLY shower_set with all parameters.
+        # The Moen app does NOT send shower_on after shower_set - shower_set alone
+        # is sufficient to turn on the shower AND apply all preset settings.
+        # This allows ready_pauses_water to work correctly (mode becomes 'paused-by-preset')
         params = {
             "active_preset": preset_position,
             "title": preset.get("title", ""),
@@ -366,10 +366,8 @@ class MoenApi:
             "ready_sounds_alert": preset.get("ready_sounds_alert", True),
         }
 
-        # First configure the preset
+        # Send only shower_set - this activates the preset with all its settings
         await self.send_control_event(channel_id, "shower_set", params)
-        # Then turn on the shower with this preset
-        await self.send_control_event(channel_id, "shower_on", {"preset": str(preset_position)})
 
     async def set_target_temperature(self, serial_number: str, temperature: float) -> None:
         """Set target temperature."""
