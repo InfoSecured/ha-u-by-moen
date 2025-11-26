@@ -1,4 +1,5 @@
 """Switch platform for U by Moen."""
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -200,6 +201,18 @@ class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
         """Turn the outlet on."""
         self._optimistic_state = True  # Optimistically assume it worked
         self.async_write_ha_state()  # Update UI immediately
+
+        device_data = self.coordinator.data[self._serial_number]
+        current_mode = device_data.get("mode", MODE_OFF)
+
+        # If shower is off, turn it on with this outlet
+        if current_mode == MODE_OFF:
+            _LOGGER.debug("Shower is off, turning on with outlet %d", self._outlet_position)
+            await self._api.set_shower_mode(self._serial_number, "on")
+            # Wait a moment for the shower to start, then set the outlet
+            await asyncio.sleep(0.5)
+
+        # Set the outlet state (add this outlet to active outlets)
         await self._api.set_outlet_state(self._serial_number, self._outlet_position, True)
         # State will be confirmed via Pusher client-state-reported event
 
@@ -207,7 +220,21 @@ class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
         """Turn the outlet off."""
         self._optimistic_state = False  # Optimistically assume it worked
         self.async_write_ha_state()  # Update UI immediately
-        await self._api.set_outlet_state(self._serial_number, self._outlet_position, False)
+
+        device_data = self.coordinator.data[self._serial_number]
+        outlets = device_data.get(ATTR_OUTLETS, [])
+
+        # Count how many outlets are currently active
+        active_outlets = [o for o in outlets if o.get("active", False)]
+
+        # If this is the only active outlet, turn off the entire shower
+        if len(active_outlets) == 1 and active_outlets[0].get("position") == self._outlet_position:
+            _LOGGER.debug("This is the only active outlet, turning off entire shower")
+            await self._api.set_shower_mode(self._serial_number, MODE_OFF)
+        else:
+            # Otherwise, just turn off this outlet
+            _LOGGER.debug("Multiple outlets active, turning off only outlet %d", self._outlet_position)
+            await self._api.set_outlet_state(self._serial_number, self._outlet_position, False)
         # State will be confirmed via Pusher client-state-reported event
 
     def _handle_coordinator_update(self) -> None:
