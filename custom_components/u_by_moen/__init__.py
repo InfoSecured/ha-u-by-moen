@@ -69,35 +69,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             # Parse the event data and update coordinator
             if event == "client-state-reported" and isinstance(data, dict):
-                # This is a state update from the device
-                # Extract the relevant fields and update coordinator
-                update_data = {}
+                # Check the event type field to see what kind of update this is
+                event_type = data.get("type", "")
+                event_data = data.get("data", {})
 
-                # Map Pusher fields to our device data fields
-                if "mode" in data:
-                    update_data["mode"] = data["mode"]
-                if "target_temperature" in data:
-                    update_data["target_temperature"] = data["target_temperature"]
-                if "current_temperature" in data:
-                    update_data["current_temperature"] = data["current_temperature"]
-                if "outlets" in data:
-                    update_data["outlets"] = data["outlets"]
-                if "active_preset" in data:
-                    update_data["active_preset"] = data["active_preset"]
-                if "timer_enabled" in data:
-                    update_data["timer_enabled"] = data["timer_enabled"]
-                if "timer_remaining" in data:
-                    update_data["timer_remaining"] = data["timer_remaining"]
+                # Process state_change events (real-time state updates)
+                if event_type in ("state_change", "shower_report") and isinstance(event_data, dict):
+                    update_data = {}
 
-                if update_data:
-                    coordinator.update_device_from_pusher(serial_number, update_data)
-                    _LOGGER.debug("Updated device %s from Pusher with: %s", serial_number, update_data)
+                    # Map Pusher fields to our device data fields
+                    if "current_mode" in event_data:
+                        update_data["mode"] = event_data["current_mode"]
+                    if "target_temperature" in event_data:
+                        update_data["target_temperature"] = event_data["target_temperature"]
+                    if "current_temperature" in event_data:
+                        update_data["current_temperature"] = event_data["current_temperature"]
+                    if "outlets" in event_data:
+                        update_data["outlets"] = event_data["outlets"]
+                    if "active_preset" in event_data:
+                        update_data["active_preset"] = event_data["active_preset"]
+                    if "timer_enabled" in event_data:
+                        update_data["timer_enabled"] = event_data["timer_enabled"]
+                    if "time_remaining" in event_data:
+                        update_data["timer_remaining"] = event_data["time_remaining"]
+                    if "presets" in event_data:
+                        update_data["presets"] = event_data["presets"]
+
+                    if update_data:
+                        coordinator.update_device_from_pusher(serial_number, update_data)
+                        _LOGGER.info("Updated device %s from Pusher with: %s", serial_number, update_data)
+                    else:
+                        _LOGGER.debug("No recognized fields in event_type='%s', requesting full refresh", event_type)
+                        await coordinator.async_request_refresh()
                 else:
-                    _LOGGER.debug("No recognized fields in Pusher event, requesting full refresh")
-                    await coordinator.async_request_refresh()
+                    # Other event types (settings, debug, etc.) - just log them
+                    _LOGGER.debug("Ignoring event_type='%s' (not a state update)", event_type)
             else:
-                # Unknown event type, do a full refresh to be safe
-                _LOGGER.debug("Unknown event type '%s', requesting full refresh", event)
+                # Unknown event, do a full refresh to be safe
+                _LOGGER.debug("Unknown event '%s', requesting full refresh", event)
                 await coordinator.async_request_refresh()
 
         return device_update_callback
