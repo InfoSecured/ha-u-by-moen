@@ -212,8 +212,25 @@ class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
             # Wait a moment for the shower to start, then set the outlet
             await asyncio.sleep(0.5)
 
-        # Set the outlet state (add this outlet to active outlets)
-        await self._api.set_outlet_state(self._serial_number, self._outlet_position, True)
+        # Get current outlet states from coordinator (has real-time data from Pusher)
+        device_data = self.coordinator.data[self._serial_number]
+        outlets = device_data.get(ATTR_OUTLETS, [])
+
+        # Build new outlet states list with this outlet turned on, keeping others as-is
+        new_outlet_states = []
+        for outlet in outlets:
+            pos = outlet.get("position")
+            # Turn on this outlet, keep others in their current state
+            if pos == self._outlet_position:
+                new_outlet_states.append({"position": pos, "active": True})
+            else:
+                new_outlet_states.append({"position": pos, "active": outlet.get("active", False)})
+
+        # Get device channel for sending command
+        device_details = await self._api.get_device_details(self._serial_number)
+        channel_id = device_details.get("channel")
+        if channel_id:
+            await self._api.send_control_event(channel_id, "outlets_set", {"outlets": new_outlet_states})
         # State will be confirmed via Pusher client-state-reported event
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -232,9 +249,24 @@ class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
             _LOGGER.debug("This is the only active outlet, turning off entire shower")
             await self._api.set_shower_mode(self._serial_number, MODE_OFF)
         else:
-            # Otherwise, just turn off this outlet
+            # Otherwise, just turn off this outlet (keep others as-is)
             _LOGGER.debug("Multiple outlets active, turning off only outlet %d", self._outlet_position)
-            await self._api.set_outlet_state(self._serial_number, self._outlet_position, False)
+
+            # Build new outlet states list with this outlet turned off, keeping others as-is
+            new_outlet_states = []
+            for outlet in outlets:
+                pos = outlet.get("position")
+                # Turn off this outlet, keep others in their current state
+                if pos == self._outlet_position:
+                    new_outlet_states.append({"position": pos, "active": False})
+                else:
+                    new_outlet_states.append({"position": pos, "active": outlet.get("active", False)})
+
+            # Get device channel for sending command
+            device_details = await self._api.get_device_details(self._serial_number)
+            channel_id = device_details.get("channel")
+            if channel_id:
+                await self._api.send_control_event(channel_id, "outlets_set", {"outlets": new_outlet_states})
         # State will be confirmed via Pusher client-state-reported event
 
     def _handle_coordinator_update(self) -> None:
