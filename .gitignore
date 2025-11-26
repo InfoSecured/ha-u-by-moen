@@ -108,3 +108,5 @@ dmypy.json
 # Home Assistant
 home-assistant.log
 home-assistant_v2.db
+
+.claude
