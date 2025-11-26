@@ -301,9 +301,10 @@ class MoenApi:
         }
 
         try:
-            _LOGGER.debug("Sending message: %s", message)
+            _LOGGER.info("Sending control event '%s' to channel '%s': %s", action, channel_name, params)
+            _LOGGER.debug("Full message: %s", message)
             await self._ws.send_json(message)
-            _LOGGER.info("Sent control event '%s' to channel '%s': %s", action, channel_name, params)
+            _LOGGER.info("Successfully sent control event '%s'", action)
             return True
 
         except Exception as err:
@@ -334,8 +335,40 @@ class MoenApi:
             _LOGGER.error("No channel ID found for device %s", serial_number)
             return
 
-        # Activate the preset by turning on the shower with the preset number
-        # This matches the pattern used for turning on the shower (shower_on with preset "0")
+        # Get preset details
+        presets = device_details.get("presets", [])
+        preset = None
+        for p in presets:
+            if p.get("position") == preset_position:
+                preset = p
+                break
+
+        if not preset:
+            _LOGGER.error("Preset %d not found", preset_position)
+            return
+
+        # Activate the preset by first configuring it with shower_set,
+        # then turning on the shower. This ensures all preset settings
+        # (including ready_pauses_water which controls auto-stop at temperature)
+        # are applied before the shower starts
+        params = {
+            "active_preset": preset_position,
+            "title": preset.get("title", ""),
+            "greeting": preset.get("greeting", ""),
+            "target_temperature": preset.get("target_temperature", 100),
+            "outlets": preset.get("outlets", []),
+            "timer_enabled": preset.get("timer_enabled", False),
+            "timer_length": preset.get("timer_length", 600),
+            "timer_ends_shower": preset.get("timer_ends_shower", False),
+            "timer_sounds_alert": preset.get("timer_sounds_alert", True),
+            "ready_pauses_water": preset.get("ready_pauses_water", False),
+            "ready_pushes_notification": preset.get("ready_pushes_notification", False),
+            "ready_sounds_alert": preset.get("ready_sounds_alert", True),
+        }
+
+        # First configure the preset
+        await self.send_control_event(channel_id, "shower_set", params)
+        # Then turn on the shower with this preset
         await self.send_control_event(channel_id, "shower_on", {"preset": str(preset_position)})
 
     async def set_target_temperature(self, serial_number: str, temperature: float) -> None:

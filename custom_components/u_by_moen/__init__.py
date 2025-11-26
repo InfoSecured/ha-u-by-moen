@@ -54,17 +54,59 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await api.connect_pusher()
 
     # Subscribe to device channels for real-time updates
-    async def device_update_callback(event: str, data: dict):
-        """Handle device updates from Pusher."""
-        _LOGGER.debug("Device update received: event=%s, data=%s", event, data)
-        # Update coordinator with new data
-        # The coordinator will notify all entities
-        await coordinator.async_request_refresh()
+    # Create a mapping from channel_id to serial_number
+    channel_to_serial = {}
+    for serial_number, device_data in coordinator.data.items():
+        channel_id = device_data.get("channel")
+        if channel_id:
+            channel_to_serial[channel_id] = serial_number
+
+    async def create_device_update_callback(serial_number: str):
+        """Create a callback for a specific device."""
+        async def device_update_callback(event: str, data: dict):
+            """Handle device updates from Pusher."""
+            _LOGGER.info("Pusher event received for %s: event='%s', data=%s", serial_number, event, data)
+
+            # Parse the event data and update coordinator
+            if event == "client-state-reported" and isinstance(data, dict):
+                # This is a state update from the device
+                # Extract the relevant fields and update coordinator
+                update_data = {}
+
+                # Map Pusher fields to our device data fields
+                if "mode" in data:
+                    update_data["mode"] = data["mode"]
+                if "target_temperature" in data:
+                    update_data["target_temperature"] = data["target_temperature"]
+                if "current_temperature" in data:
+                    update_data["current_temperature"] = data["current_temperature"]
+                if "outlets" in data:
+                    update_data["outlets"] = data["outlets"]
+                if "active_preset" in data:
+                    update_data["active_preset"] = data["active_preset"]
+                if "timer_enabled" in data:
+                    update_data["timer_enabled"] = data["timer_enabled"]
+                if "timer_remaining" in data:
+                    update_data["timer_remaining"] = data["timer_remaining"]
+
+                if update_data:
+                    coordinator.update_device_from_pusher(serial_number, update_data)
+                    _LOGGER.debug("Updated device %s from Pusher with: %s", serial_number, update_data)
+                else:
+                    _LOGGER.debug("No recognized fields in Pusher event, requesting full refresh")
+                    await coordinator.async_request_refresh()
+            else:
+                # Unknown event type, do a full refresh to be safe
+                _LOGGER.debug("Unknown event type '%s', requesting full refresh", event)
+                await coordinator.async_request_refresh()
+
+        return device_update_callback
 
     for serial_number, device_data in coordinator.data.items():
         channel_id = device_data.get("channel")
         if channel_id:
-            await api.subscribe_to_channel(channel_id, device_update_callback)
+            callback = await create_device_update_callback(serial_number)
+            await api.subscribe_to_channel(channel_id, callback)
             _LOGGER.info("Subscribed to updates for device %s", serial_number)
 
     return True
