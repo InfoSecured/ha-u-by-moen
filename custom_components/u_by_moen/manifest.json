@@ -1,11 +1,11 @@
 {
   "domain": "u_by_moen",
   "name": "U by Moen",
-  "documentation": "https://github.com/InfoSecured/ha-u-by-moen",
-  "issue_tracker": "https://github.com/InfoSecured/ha-u-by-moen/issues",
-  "requirements": [],
   "codeowners": ["@InfoSecured"],
   "config_flow": true,
+  "documentation": "https://github.com/InfoSecured/ha-u-by-moen",
   "iot_class": "cloud_push",
-  "version": "1.0.0"
+  "issue_tracker": "https://github.com/InfoSecured/ha-u-by-moen/issues",
+  "requirements": [],
+  "version": "1.0.1"
 }
