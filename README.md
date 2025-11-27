@@ -14,6 +14,8 @@ A custom Home Assistant integration for U by Moen smart shower systems (Alexa/An
 
 ### HACS (Recommended)
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=InfoSecured&repository=ha-u-by-moen)
+
 1. Open HACS in Home Assistant
 2. Click on "Integrations"
 3. Click the three dots in the top right corner
