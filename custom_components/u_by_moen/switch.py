@@ -13,6 +13,7 @@ from .const import (
     DOMAIN,
     ATTR_OUTLETS,
     MODE_OFF,
+    MODE_PAUSED_BY_PRESET,
     ICON_SHOWER,
     ICON_OUTLET,
 )
@@ -106,14 +107,20 @@ class MoenShowerSwitch(CoordinatorEntity, SwitchEntity):
         # Otherwise use coordinator data
         device_data = self.coordinator.data[self._serial_number]
         mode = device_data.get("mode", MODE_OFF)
-        # Any mode other than "off" means the shower is on
-        return mode != MODE_OFF
+        # Treat paused-by-preset like off so UI exposes resume option
+        return mode not in (MODE_OFF, MODE_PAUSED_BY_PRESET)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the shower on."""
         self._optimistic_state = True  # Optimistically assume it worked
         self.async_write_ha_state()  # Update UI immediately
-        await self._api.set_shower_mode(self._serial_number, "on")
+        device_data = self.coordinator.data[self._serial_number]
+        mode = device_data.get("mode", MODE_OFF)
+        active_preset = device_data.get("active_preset")
+        if mode == MODE_PAUSED_BY_PRESET:
+            await self._api.resume_shower(self._serial_number, active_preset)
+        else:
+            await self._api.set_shower_mode(self._serial_number, "on")
         # State will be confirmed via Pusher client-state-reported event
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -210,6 +217,15 @@ class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
             _LOGGER.debug("Shower is off, turning on with outlet %d", self._outlet_position)
             await self._api.set_shower_mode(self._serial_number, "on")
             # Wait a moment for the shower to start, then set the outlet
+            await asyncio.sleep(0.5)
+        elif current_mode == MODE_PAUSED_BY_PRESET:
+            _LOGGER.debug(
+                "Shower paused by preset, resuming before enabling outlet %d",
+                self._outlet_position,
+            )
+            await self._api.resume_shower(
+                self._serial_number, device_data.get("active_preset")
+            )
             await asyncio.sleep(0.5)
 
         # Get current outlet states from coordinator (has real-time data from Pusher)

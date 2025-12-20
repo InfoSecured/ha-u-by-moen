@@ -21,6 +21,7 @@ from .const import (
     ATTR_TARGET_TEMP,
     ATTR_MAX_TEMP,
     MODE_OFF,
+    MODE_PAUSED_BY_PRESET,
     ICON_SHOWER,
 )
 from .coordinator import MoenDataUpdateCoordinator
@@ -97,6 +98,9 @@ class MoenClimate(CoordinatorEntity, ClimateEntity):
         # Otherwise use coordinator data
         device_data = self.coordinator.data[self._serial_number]
         mode = device_data.get(ATTR_MODE, MODE_OFF)
+        # Treat paused-by-preset as "off" so Home Assistant exposes resume controls
+        if mode == MODE_PAUSED_BY_PRESET:
+            return HVACMode.OFF
         # Any mode other than "off" means the shower is on (adjusting, ready, pause)
         return HVACMode.HEAT if mode != MODE_OFF else HVACMode.OFF
 
@@ -136,8 +140,15 @@ class MoenClimate(CoordinatorEntity, ClimateEntity):
         """Set new HVAC mode."""
         self._optimistic_hvac_mode = hvac_mode  # Optimistically assume it worked
         self.async_write_ha_state()  # Update UI immediately
+        device_data = self.coordinator.data[self._serial_number]
+        mode = device_data.get(ATTR_MODE, MODE_OFF)
         if hvac_mode == HVACMode.HEAT:
-            await self._api.set_shower_mode(self._serial_number, "on")
+            if mode == MODE_PAUSED_BY_PRESET:
+                await self._api.resume_shower(
+                    self._serial_number, device_data.get("active_preset")
+                )
+            else:
+                await self._api.set_shower_mode(self._serial_number, "on")
         elif hvac_mode == HVACMode.OFF:
             await self._api.set_shower_mode(self._serial_number, MODE_OFF)
         # State will be confirmed via Pusher client-state-reported event

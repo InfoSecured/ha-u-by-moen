@@ -311,7 +311,9 @@ class MoenApi:
             _LOGGER.error("Failed to send control event: %s", err)
             return False
 
-    async def set_shower_mode(self, serial_number: str, mode: str) -> None:
+    async def set_shower_mode(
+        self, serial_number: str, mode: str, preset: Optional[str] = None
+    ) -> None:
         """Set shower mode (on/off)."""
         device_details = await self.get_device_details(serial_number)
         channel_id = device_details.get("channel")
@@ -322,9 +324,45 @@ class MoenApi:
 
         # Use the actual action names from the real app
         if mode == "on":
-            await self.send_control_event(channel_id, "shower_on", {"preset": "0"})
+            preset_param = preset if preset is not None else "0"
+            await self.send_control_event(channel_id, "shower_on", {"preset": preset_param})
         else:
             await self.send_control_event(channel_id, "shower_off", {})
+
+    async def resume_shower(
+        self, serial_number: str, preset: Optional[int] = None
+    ) -> None:
+        """Resume water after a preset paused the shower."""
+        device_details = await self.get_device_details(serial_number)
+        channel_id = device_details.get("channel")
+
+        if not channel_id:
+            _LOGGER.error("No channel ID found for device %s", serial_number)
+            return
+
+        active_preset = preset
+        if active_preset is None:
+            active_preset = device_details.get("active_preset")
+
+        if not active_preset:
+            _LOGGER.error(
+                "Cannot resume shower %s because no active preset is reported",
+                serial_number,
+            )
+            return
+
+        preset_param = str(active_preset)
+
+        _LOGGER.info(
+            "Resuming shower %s from paused-by-preset state using preset %s",
+            serial_number,
+            preset_param,
+        )
+        await self.send_control_event(
+            channel_id,
+            "shower_on",
+            {"preset": preset_param},
+        )
 
     async def activate_preset(self, serial_number: str, preset_position: int) -> None:
         """Activate a preset."""
