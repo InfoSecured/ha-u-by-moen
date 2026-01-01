@@ -186,6 +186,8 @@ This integration uses the Moen IoT API:
 
 Contributions are welcome! Please open an issue or pull request.
 
+Come see our other apps and integrations at [WeaveHub](https://weavehub.app).
+
 ### Development Setup
 
 1. Clone this repository
