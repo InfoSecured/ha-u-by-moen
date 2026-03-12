@@ -43,6 +43,7 @@ class MoenApi:
         self._ws_task: Optional[asyncio.Task] = None
         self._update_callbacks: Dict[str, Callable] = {}
         self._running = False
+        self._reconnecting = False
 
     async def authenticate(self) -> str:
         """Authenticate with the Moen API and return the token."""
@@ -104,6 +105,13 @@ class MoenApi:
                 _LOGGER.debug("Found %d devices", len(devices))
                 return devices
 
+        except aiohttp.ClientResponseError as err:
+            if err.status == 401:
+                _LOGGER.warning("Token expired during get_devices, re-authenticating...")
+                self._token = None
+                await self.authenticate()
+                return await self.get_devices()
+            raise MoenApiError(f"Failed to get devices: {err}") from err
         except aiohttp.ClientError as err:
             raise MoenApiError(f"Failed to get devices: {err}") from err
 
@@ -168,7 +176,6 @@ class MoenApi:
             self._running = True
             _LOGGER.info("Connected to Pusher WebSocket")
 
-            # Start message handler task
             self._ws_task = asyncio.create_task(self._handle_messages())
             return True
 
@@ -185,12 +192,20 @@ class MoenApi:
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     _LOGGER.error("WebSocket error: %s", self._ws.exception())
                     break
+                elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED):
+                    _LOGGER.warning("WebSocket closed, will attempt reconnect")
+                    break
         except asyncio.CancelledError:
             _LOGGER.debug("WebSocket handler cancelled")
+            return
         except Exception as err:
             _LOGGER.error("Error handling WebSocket messages: %s", err)
         finally:
             self._running = False
+
+        if not self._reconnecting:
+            _LOGGER.warning("Pusher connection lost, scheduling reconnect...")
+            asyncio.create_task(self._reconnect_pusher())
 
     async def _process_message(self, message: str):
         """Process a Pusher message."""
@@ -204,7 +219,26 @@ class MoenApi:
                 _LOGGER.info("Pusher connection established, socket_id: %s", self._socket_id)
 
             elif event == "pusher:error":
-                _LOGGER.error("Pusher error: %s", data.get("data"))
+                error_data = data.get("data")
+
+                if isinstance(error_data, str):
+                    try:
+                        error_data = json.loads(error_data)
+                    except json.JSONDecodeError:
+                        pass
+
+                _LOGGER.error("Pusher error: %s", error_data)
+                code = error_data.get("code") if isinstance(error_data, dict) else None
+
+                if code == 4200:
+                    _LOGGER.warning("Pusher requested immediate reconnect (4200), reconnecting...")
+                    if not self._reconnecting:
+                        asyncio.create_task(self._reconnect_pusher())
+                elif code and 4100 <= code <= 4199:
+                    _LOGGER.error("Pusher fatal error code %s, will not reconnect", code)
+                else:
+                    if not self._reconnecting:
+                        asyncio.create_task(self._reconnect_pusher())
 
             elif event == "pusher_internal:subscription_succeeded":
                 channel = data.get("channel")
@@ -212,7 +246,6 @@ class MoenApi:
                 self._subscribed_channels[channel] = True
 
             else:
-                # Handle custom events (device updates)
                 channel = data.get("channel", "")
                 event_data = data.get("data")
                 if event_data:
@@ -223,7 +256,6 @@ class MoenApi:
 
                 _LOGGER.debug("Received event '%s' on channel '%s': %s", event, channel, event_data)
 
-                # Call update callbacks
                 if channel in self._update_callbacks:
                     await self._update_callbacks[channel](event, event_data)
 
@@ -240,7 +272,6 @@ class MoenApi:
 
         channel_name = f"{PUSHER_CHANNEL_PREFIX}{channel_id}"
 
-        # Wait for socket_id if not yet available
         retries = 0
         while not self._socket_id and retries < 10:
             await asyncio.sleep(0.5)
@@ -250,13 +281,11 @@ class MoenApi:
             _LOGGER.error("No socket_id available, cannot subscribe")
             return False
 
-        # Get auth for private channel
         auth = await self.get_pusher_auth(channel_name)
         if not auth:
             _LOGGER.error("Failed to get auth for channel %s", channel_name)
             return False
 
-        # Send subscription message
         subscribe_msg = {
             "event": "pusher:subscribe",
             "data": {
@@ -287,7 +316,6 @@ class MoenApi:
             _LOGGER.error("Not subscribed to channel %s", channel_name)
             return False
 
-        # Format matches the real Moen app: client-state-desired with type=control
         message = {
             "event": "client-state-desired",
             "channel": channel_name,
@@ -322,7 +350,6 @@ class MoenApi:
             _LOGGER.error("No channel ID found for device %s", serial_number)
             return
 
-        # Use the actual action names from the real app
         if mode == "on":
             preset_param = preset if preset is not None else "0"
             await self.send_control_event(channel_id, "shower_on", {"preset": preset_param})
@@ -373,7 +400,6 @@ class MoenApi:
             _LOGGER.error("No channel ID found for device %s", serial_number)
             return
 
-        # Get preset details
         presets = device_details.get("presets", [])
         preset = None
         for p in presets:
@@ -385,10 +411,6 @@ class MoenApi:
             _LOGGER.error("Preset %d not found", preset_position)
             return
 
-        # Activate the preset by sending ONLY shower_set with all parameters.
-        # The Moen app does NOT send shower_on after shower_set - shower_set alone
-        # is sufficient to turn on the shower AND apply all preset settings.
-        # This allows ready_pauses_water to work correctly (mode becomes 'paused-by-preset')
         params = {
             "active_preset": preset_position,
             "title": preset.get("title", ""),
@@ -404,7 +426,6 @@ class MoenApi:
             "ready_sounds_alert": preset.get("ready_sounds_alert", True),
         }
 
-        # Send only shower_set - this activates the preset with all its settings
         await self.send_control_event(channel_id, "shower_set", params)
 
     async def set_target_temperature(self, serial_number: str, temperature: float) -> None:
@@ -427,7 +448,6 @@ class MoenApi:
             _LOGGER.error("No channel ID found for device %s", serial_number)
             return
 
-        # Get current outlet states and update the specific outlet
         outlets = device_details.get("outlets", [])
         outlet_states = []
         for outlet in outlets:
@@ -438,6 +458,42 @@ class MoenApi:
             outlet_states.append({"position": pos, "active": is_active})
 
         await self.send_control_event(channel_id, "outlets_set", {"outlets": outlet_states})
+
+    async def _reconnect_pusher(self):
+        """Reconnect to Pusher after error or disconnect."""
+        if self._reconnecting:
+            _LOGGER.debug("Reconnect already in progress, skipping")
+            return
+
+        self._reconnecting = True
+        backoff = 2
+
+        try:
+            for attempt in range(1, 6):
+                _LOGGER.info("Pusher reconnect attempt %d/5...", attempt)
+                await self.disconnect_pusher()
+                await asyncio.sleep(backoff)
+
+                try:
+                    await self.get_pusher_credentials()
+                    success = await self.connect_pusher()
+                except Exception as err:
+                    _LOGGER.warning("Reconnect attempt %d failed: %s", attempt, err)
+                    backoff = min(backoff * 2, 60)
+                    continue
+
+                if success:
+                    for channel_name, callback in list(self._update_callbacks.items()):
+                        channel_id = channel_name.replace(PUSHER_CHANNEL_PREFIX, "")
+                        await self.subscribe_to_channel(channel_id, callback)
+                    _LOGGER.info("Pusher reconnect complete after %d attempt(s)", attempt)
+                    return
+
+                backoff = min(backoff * 2, 60)
+
+            _LOGGER.error("Pusher reconnect failed after 5 attempts")
+        finally:
+            self._reconnecting = False
 
     async def disconnect_pusher(self):
         """Disconnect from Pusher WebSocket."""
