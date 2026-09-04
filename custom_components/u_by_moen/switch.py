@@ -216,8 +216,11 @@ class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
         if current_mode == MODE_OFF:
             _LOGGER.debug("Shower is off, turning on with outlet %d", self._outlet_position)
             await self._api.set_shower_mode(self._serial_number, "on")
-            # Wait a moment for the shower to start, then set the outlet
-            await asyncio.sleep(0.5)
+            # The device silently ignores outlets_set until it has reported
+            # itself running (verified on TS3304 fw 3.3.0): wait for the
+            # reported state instead of a blind sleep. Pusher state events
+            # normally confirm within ~1s.
+            await self._wait_for_running()
         elif current_mode == MODE_PAUSED_BY_PRESET:
             _LOGGER.debug(
                 "Shower paused by preset, resuming before enabling outlet %d",
@@ -248,6 +251,36 @@ class MoenOutletSwitch(CoordinatorEntity, SwitchEntity):
         if channel_id:
             await self._api.send_control_event(channel_id, "outlets_set", {"outlets": new_outlet_states})
         # State will be confirmed via Pusher client-state-reported event
+
+    async def _wait_for_running(self, timeout: float = 10.0) -> None:
+        """Wait until the shower reports a non-off mode before sending outlets_set.
+
+        The device drops outlet commands that arrive while it is still in
+        'off'. State normally arrives via the Pusher client-state-reported
+        event within ~1s of shower_on; one REST refresh is requested as a
+        backup in case Pusher is disconnected.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        requested_refresh = False
+        while asyncio.get_event_loop().time() < deadline:
+            device_data = self.coordinator.data[self._serial_number]
+            mode = device_data.get("mode", MODE_OFF)
+            if mode not in (MODE_OFF, MODE_PAUSED_BY_PRESET):
+                return
+            if not requested_refresh and timeout - (
+                deadline - asyncio.get_event_loop().time()
+            ) > 2.0:
+                requested_refresh = True
+                try:
+                    await self.coordinator.async_request_refresh()
+                except Exception:  # noqa: BLE001
+                    pass
+            await asyncio.sleep(0.25)
+        _LOGGER.warning(
+            "Shower %s did not report running within %.0fs; sending outlets_set anyway",
+            self._serial_number,
+            timeout,
+        )
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the outlet off."""
